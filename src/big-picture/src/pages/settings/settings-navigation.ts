@@ -5,6 +5,9 @@ import {
   BIG_PICTURE_SIDEBAR_ITEM_IDS,
 } from "../../layout/navigation";
 
+export const NETWORK_REFRESH_BUTTON_ID = "network-refresh";
+export const NETWORK_SECTION_REGION_ID = "network-section-region";
+
 export const DOWNLOAD_DIRECTORIES_DEFAULT_SELECT_ID =
   "download-directories-default-select";
 export const LANGUAGE_SECTION_BUTTON_ID = "language-section-button";
