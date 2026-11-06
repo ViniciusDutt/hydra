@@ -1,0 +1,56 @@
+.game-installation-modal {
+  width: min(620px, calc(100vw - 64px));
+
+  &__progress {
+    position: relative;
+    height: 10px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  &__progress-bar {
+    position: absolute;
+    left: 0;
+    width: 45%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #7b5cff, #b9a8ff);
+    box-shadow: 0 0 12px rgba(151, 125, 255, 0.65);
+    animation: game-installation-progress 1.2s ease-in-out infinite;
+
+    &--determinate {
+      left: 0;
+      animation: none;
+      transition: width 250ms ease-out;
+    }
+  }
+
+  &__status {
+    color: var(--text-secondary);
+  }
+
+  &__warning {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 16px;
+    border: 1px solid rgba(255, 190, 66, 0.35);
+    border-radius: 12px;
+    color: #ffca66;
+    background: rgba(255, 174, 0, 0.08);
+  }
+
+  &__actions {
+    margin-top: 12px;
+  }
+}
+
+@keyframes game-installation-progress {
+  from {
+    left: -45%;
+  }
+  to {
+    left: 100%;
+  }
+}

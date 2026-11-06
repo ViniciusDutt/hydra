@@ -34,6 +34,8 @@ const addGameToQueue = async (
     fileSize,
     fileIndices,
     selectedFilesSize,
+    downloadSourceName,
+    repackTitle,
   } = payload;
 
   const parsedFileSize = parseBytes(fileSize ?? null);
@@ -66,6 +68,8 @@ const addGameToQueue = async (
       fileIndices,
       selectedFilesSize,
       customTrackers: globalTrackers,
+      downloadSourceName,
+      repackTitle,
     };
 
     if (!DownloadOrchestrator.preparesRealDebridInBackground(download)) {

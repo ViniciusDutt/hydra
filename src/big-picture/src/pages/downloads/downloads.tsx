@@ -2368,7 +2368,7 @@ export default function Downloads() {
             } satisfies ContextMenuItem,
           ]
         : []),
-      ...(completedStep === "install"
+      ...(completedStep === "select-executable"
         ? [
             {
               id: "select-executable",

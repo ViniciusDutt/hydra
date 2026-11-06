@@ -1,5 +1,6 @@
 import { shell } from "electron";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
@@ -19,6 +20,10 @@ import {
   getDownloadFolderPath,
 } from "@main/helpers/find-game-installer";
 import {
+  getGameInstallationPath,
+  resolveGameInstallerProfile,
+} from "@main/helpers/game-installer-profiles";
+import {
   endInstallerRun,
   markInstallerRunLive,
   startInstalledExecutablePolling,
@@ -26,10 +31,15 @@ import {
 } from "@main/helpers/installed-executable-poller";
 
 interface InstallerLaunchOptions {
+  args: string[];
+  forceElevation: boolean;
+  installationPath: string;
+  replaceInstallerTempFiles: Record<string, string>;
   gameId?: string;
   winePrefixPath?: string | null;
   protonPath?: string | null;
   onExit: (exitCode: number | null) => void;
+  onProgress: (progress: number) => void;
   onCancel: () => void;
   onUntrackedLaunch: () => void;
 }
@@ -62,22 +72,53 @@ const releaseRunningInstaller = (
 const isSuccessfulExit = (exitCode: number | null) =>
   exitCode !== null && SUCCESS_EXIT_CODES.has(exitCode);
 
-const ELEVATED_INSTALLER_COMMAND = [
+const ELEVATED_INSTALLER_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
+  "$configuration = Get-Content -LiteralPath $args[0] -Raw | ConvertFrom-Json; foreach ($property in $configuration.PSObject.Properties) { [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, 'Process') }",
+  "function Write-HydraStatus([string]$message) { Add-Content -LiteralPath $env:HYDRA_INSTALLER_STATUS_PATH -Value $message -Encoding UTF8 }",
   "try {",
-  "$info = New-Object System.Diagnostics.ProcessStartInfo",
-  "$info.FileName = $env:HYDRA_INSTALLER_PATH",
-  "$info.WorkingDirectory = [System.IO.Path]::GetDirectoryName($env:HYDRA_INSTALLER_PATH)",
-  "$info.Verb = 'runas'",
-  "$info.UseShellExecute = $true",
-  "$installer = [System.Diagnostics.Process]::Start($info)",
-  `Write-Output '${INSTALLER_STARTED_MARKER}'`,
-  `if ($installer) { $installer.WaitForExit(); Write-Output ('${INSTALLER_EXIT_MARKER}' + $installer.ExitCode) }`,
+  "$replacementParts = $env:HYDRA_REPLACE_TEMP_FILES -split ';' | Where-Object { $_ }",
+  "$replacementFiles = @{}; foreach ($part in $replacementParts) { $separator = $part.IndexOf('='); if ($separator -gt 0) { $replacementFiles[$part.Substring(0, $separator).ToLowerInvariant()] = [Convert]::FromBase64String($part.Substring($separator + 1)) } }",
+  "$tempWatcher = New-Object System.IO.FileSystemWatcher $env:TEMP",
+  "$tempWatcher.IncludeSubdirectories = $true",
+  "$tempWatcher.EnableRaisingEvents = $true",
+  "$tempActionData = @{ Replace = $replacementFiles }",
+  "$removeTempAction = { $candidate = $Event.SourceEventArgs.FullPath; if ($candidate -notmatch '[\\/]is-[^\\/]+\\.tmp[\\/]') { return }; $leaf = [System.IO.Path]::GetFileName($candidate).ToLowerInvariant(); if ($Event.MessageData.Replace.ContainsKey($leaf)) { $silentBytes = $Event.MessageData.Replace[$leaf]; for ($attempt = 0; $attempt -lt 20; $attempt++) { try { if ((Get-Item -LiteralPath $candidate -ErrorAction Stop).Length -ne $silentBytes.Length) { [System.IO.File]::WriteAllBytes($candidate, $silentBytes) }; break } catch { Start-Sleep -Milliseconds 2 } } } }",
+  'Add-Type -TypeDefinition \'using System; using System.ComponentModel; using System.Runtime.InteropServices; using System.Text; public static class HydraDesktop { [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct STARTUPINFO { public int cb; public string lpReserved; public string lpDesktop; public string lpTitle; public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow; public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError; } [StructLayout(LayoutKind.Sequential)] public struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; } [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr CreateDesktop(string name, IntPtr device, IntPtr devmode, int flags, uint access, IntPtr attributes); [DllImport("user32.dll", SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool SetThreadDesktop(IntPtr desktop); [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool CreateProcess(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation); [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle); public static int StartProcess(string desktop, string application, string arguments, string currentDirectory) { var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = desktop }; var command = new StringBuilder("\\"" + application + "\\" " + arguments); PROCESS_INFORMATION process; if (!CreateProcess(application, command, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, currentDirectory, ref startup, out process)) throw new Win32Exception(Marshal.GetLastWin32Error()); CloseHandle(process.hThread); CloseHandle(process.hProcess); return process.dwProcessId; } }\'',
+  "$desktopName = 'HydraInstaller-' + [Guid]::NewGuid().ToString('N')",
+  "$desktopHandle = [HydraDesktop]::CreateDesktop($desktopName, [IntPtr]::Zero, [IntPtr]::Zero, 0, 0x10000000, [IntPtr]::Zero); if ($desktopHandle -eq [IntPtr]::Zero) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }",
+  "$createdSubscription = Register-ObjectEvent $tempWatcher Created -MessageData $tempActionData -Action $removeTempAction",
+  "$changedSubscription = Register-ObjectEvent $tempWatcher Changed -MessageData $tempActionData -Action $removeTempAction",
+  "$installerId = [HydraDesktop]::StartProcess($desktopName, $env:HYDRA_INSTALLER_PATH, $env:HYDRA_INSTALLER_ARGUMENTS, [System.IO.Path]::GetDirectoryName($env:HYDRA_INSTALLER_PATH))",
+  "$installer = [System.Diagnostics.Process]::GetProcessById($installerId)",
+  `Write-HydraStatus '${INSTALLER_STARTED_MARKER}'`,
+  "if ($installer) {",
+  "Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes",
+  "Add-Type -TypeDefinition 'using System; using System.Collections.Generic; using System.Runtime.InteropServices; public static class HydraDesktopWindows { public delegate bool EnumDesktopWindowsProc(IntPtr window, IntPtr parameter); [DllImport(\"user32.dll\", SetLastError=true)] static extern bool EnumDesktopWindows(IntPtr desktop, EnumDesktopWindowsProc callback, IntPtr parameter); public static IntPtr[] GetWindows(IntPtr desktop) { var windows = new List<IntPtr>(); EnumDesktopWindows(desktop, delegate(IntPtr window, IntPtr parameter) { windows.Add(window); return true; }, IntPtr.Zero); return windows.ToArray(); } }'",
+  'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; using System.Text; public static class HydraWindow { [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder className, int length); [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hDlg, int nIDDlgItem); [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam); public static bool HasClass(IntPtr window, string expected) { var name = new StringBuilder(256); GetClassName(window, name, name.Capacity); return string.Equals(name.ToString(), expected, StringComparison.Ordinal); } }\'',
+  "$lastProgress = -1",
+  "while (-not $installer.HasExited) {",
+  "$desktopHandles = @([HydraDesktopWindows]::GetWindows($desktopHandle))",
+  "$quickSfvHandle = $desktopHandles | Where-Object { [HydraWindow]::HasClass($_, 'QSFV_MAIN') } | Select-Object -First 1",
+  "if ($quickSfvHandle) { [HydraWindow]::SendMessage($quickSfvHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null }",
+  "$languageHandle = $desktopHandles | Where-Object { [HydraWindow]::HasClass($_, 'TSelectLanguageForm') } | Select-Object -First 1",
+  "if ($languageHandle) { [HydraWindow]::SendMessage($languageHandle, 0x0111, [IntPtr]1, [IntPtr]::Zero) | Out-Null }",
+  "$desktopWindows = @($desktopHandles | ForEach-Object { try { [System.Windows.Automation.AutomationElement]::FromHandle($_) } catch {} } | Where-Object { $_ })",
+  "$wizardHandle = $desktopHandles | Where-Object { [HydraWindow]::HasClass($_, 'TWizardForm') } | Select-Object -First 1",
+  "$window = if ($wizardHandle) { try { [System.Windows.Automation.AutomationElement]::FromHandle($wizardHandle) } catch { $null } } else { $null }",
+  "if ($window) { $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition); $finish = $null; $install = $null; $next = $null; for ($index = 0; $index -lt $elements.Count; $index++) { $element = $elements.Item($index); if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::ProgressBar) { try { $range = $element.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern); $span = $range.Current.Maximum - $range.Current.Minimum; if ($span -gt 0) { $progress = [Math]::Round((($range.Current.Value - $range.Current.Minimum) / $span) * 100); if ($progress -ne $lastProgress) { Write-HydraStatus ('HYDRA_INSTALLER_PROGRESS=' + $progress); $lastProgress = $progress } } } catch {} }; if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $element.Current.IsEnabled) { if ($element.Current.Name -match '^(Finish|Concluir)$') { $finish = $element } elseif ($element.Current.Name -match '^(Install|Instalar)$') { $install = $element } elseif ($element.Current.Name -match '^(Next|Avan.ar).*$') { $next = $element } } }; if ($finish) { for ($index = 0; $index -lt $elements.Count; $index++) { $element = $elements.Item($index); if ($element.Current.ControlType -eq [System.Windows.Automation.ControlType]::CheckBox) { try { $toggle = $element.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern); if ($toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) { $toggle.Toggle() } } catch {} } }; ($finish.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } elseif ($install) { ($install.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } elseif ($next) { ($next.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke() } }",
+  "Start-Sleep -Milliseconds 250",
+  "}",
+  `Write-HydraStatus ('${INSTALLER_EXIT_MARKER}' + $installer.ExitCode)`,
+  "}",
+  "Get-EventSubscriber -ErrorAction SilentlyContinue | Where-Object { $_.SourceObject -eq $tempWatcher } | Unregister-Event -ErrorAction SilentlyContinue",
+  "Get-Job -ErrorAction SilentlyContinue | Where-Object { $_.Id -in @($createdSubscription.Id, $changedSubscription.Id) } | Remove-Job -Force -ErrorAction SilentlyContinue",
+  "$tempWatcher.Dispose()",
   "} catch {",
   "$failure = $_.Exception.GetBaseException()",
-  `if ($failure.NativeErrorCode -eq ${UAC_DECLINED_EXIT_CODE}) { Write-Output '${INSTALLER_EXIT_MARKER}${UAC_DECLINED_EXIT_CODE}' } else { Write-Output $failure.Message }`,
+  `if ($failure.NativeErrorCode -eq ${UAC_DECLINED_EXIT_CODE}) { Write-HydraStatus '${INSTALLER_EXIT_MARKER}${UAC_DECLINED_EXIT_CODE}' } else { Write-HydraStatus $failure.Message }`,
   "}",
-].join("; ");
+].join("\r\n");
 
 interface SpawnInstallerResult {
   spawned: boolean;
@@ -89,6 +130,7 @@ interface SpawnInstallerConfig {
   args: string[];
   failureMessage: string;
   onExit: (code: number | null, output: string) => void;
+  onOutput?: (output: string) => void;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   captureOutput?: boolean;
@@ -102,6 +144,7 @@ const spawnInstaller = async ({
   env,
   cwd,
   captureOutput = false,
+  onOutput,
 }: SpawnInstallerConfig): Promise<SpawnInstallerResult> => {
   return await new Promise<SpawnInstallerResult>((resolve) => {
     let child: ReturnType<typeof spawn>;
@@ -126,7 +169,9 @@ const spawnInstaller = async ({
     }
 
     const appendOutput = (chunk: Buffer) => {
-      output += chunk.toString();
+      const text = chunk.toString();
+      output += text;
+      onOutput?.(text);
     };
     child.stdout?.on("data", appendOutput);
     child.stderr?.on("data", appendOutput);
@@ -182,21 +227,42 @@ const handleElevatedInstallerExit = async (
   }
 
   logger.error("Failed to launch game installer with elevation");
-
-  if (await openPathAndCheck(filePath)) {
-    logger.info(`[GameInstaller] Opened ${filePath} untracked`);
-    return options.onUntrackedLaunch();
-  }
-
-  logger.error(`[GameInstaller] Could not open ${filePath}`);
   options.onCancel();
 };
 
 const launchInstallerElevated = async (
   filePath: string,
   options: InstallerLaunchOptions
-) =>
-  spawnInstaller({
+) => {
+  const helperDirectory = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "hydra-installer-")
+  );
+  const scriptPath = path.join(helperDirectory, "install.ps1");
+  const statusPath = path.join(helperDirectory, "status.log");
+  const configurationPath = path.join(helperDirectory, "configuration.json");
+
+  const elevatedConfiguration = {
+    HYDRA_INSTALLER_PATH: filePath,
+    HYDRA_INSTALLER_ARGUMENTS: options.args
+      .map((argument) => `"${argument.replaceAll('"', '\\"')}"`)
+      .join(" "),
+    HYDRA_INSTALLATION_PATH: options.installationPath,
+    HYDRA_REPLACE_TEMP_FILES: Object.entries(options.replaceInstallerTempFiles)
+      .map(([fileName, contents]) => `${fileName}=${contents}`)
+      .join(";"),
+    HYDRA_INSTALLER_STATUS_PATH: statusPath,
+  };
+
+  await Promise.all([
+    fs.promises.writeFile(scriptPath, ELEVATED_INSTALLER_SCRIPT, "utf8"),
+    fs.promises.writeFile(
+      configurationPath,
+      JSON.stringify(elevatedConfiguration),
+      "utf8"
+    ),
+  ]);
+
+  return spawnInstaller({
     command: "powershell.exe",
     args: [
       "-NoProfile",
@@ -204,18 +270,31 @@ const launchInstallerElevated = async (
       "-ExecutionPolicy",
       "Bypass",
       "-Command",
-      ELEVATED_INSTALLER_COMMAND,
+      "$ErrorActionPreference = 'Stop'; try { $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + [char]34 + $env:HYDRA_ELEVATED_SCRIPT_PATH + [char]34 + ' ' + [char]34 + $env:HYDRA_ELEVATED_CONFIGURATION_PATH + [char]34; $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $arguments -WindowStyle Hidden -PassThru; $seen = 0; while (-not $elevated.HasExited) { if (Test-Path -LiteralPath $env:HYDRA_INSTALLER_STATUS_PATH) { $lines = @(Get-Content -LiteralPath $env:HYDRA_INSTALLER_STATUS_PATH); $lines | Select-Object -Skip $seen | Write-Output; $seen = $lines.Count }; Start-Sleep -Milliseconds 200; $elevated.Refresh() }; if (Test-Path -LiteralPath $env:HYDRA_INSTALLER_STATUS_PATH) { $lines = @(Get-Content -LiteralPath $env:HYDRA_INSTALLER_STATUS_PATH); $lines | Select-Object -Skip $seen | Write-Output }; exit $elevated.ExitCode } catch { $failure = $_.Exception.GetBaseException(); if ($failure.NativeErrorCode -eq 1223) { Write-Output 'HYDRA_INSTALLER_EXIT=1223'; exit 0 }; Write-Error $failure.Message; exit 1 }",
     ],
     failureMessage: "Failed to execute game installer with elevation",
-    onExit: (code, output) =>
+    onOutput: (output) => {
+      for (const match of output.matchAll(/HYDRA_INSTALLER_PROGRESS=(\d+)/g)) {
+        options.onProgress(Math.min(100, Math.max(0, Number(match[1]))));
+      }
+    },
+    onExit: (code, output) => {
+      void fs.promises.rm(helperDirectory, { recursive: true, force: true });
       void handleElevatedInstallerExit(code, output, filePath, options).catch(
         (error) => {
           logger.error("Failed to handle the elevated installer exit", error);
         }
-      ),
-    env: { ...process.env, HYDRA_INSTALLER_PATH: filePath },
+      );
+    },
+    env: {
+      ...process.env,
+      HYDRA_ELEVATED_SCRIPT_PATH: scriptPath,
+      HYDRA_ELEVATED_CONFIGURATION_PATH: configurationPath,
+      ...elevatedConfiguration,
+    },
     captureOutput: true,
   });
+};
 
 const launchInstallerWithUmu = async (
   filePath: string,
@@ -224,7 +303,7 @@ const launchInstallerWithUmu = async (
   let launched = false;
 
   try {
-    await Umu.launchExecutable(filePath, [], {
+    await Umu.launchExecutable(filePath, options.args, {
       gameId: options.gameId,
       winePrefixPath: options.winePrefixPath,
       protonPath: options.protonPath,
@@ -270,9 +349,17 @@ const executeWindowsInstaller = async (
   filePath: string,
   options: InstallerLaunchOptions
 ): Promise<InstallerLaunchResult> => {
+  if (options.forceElevation) {
+    const elevated = await launchInstallerElevated(filePath, options);
+    if (elevated.spawned) return trackedLaunch(filePath, "with elevation");
+
+    options.onCancel();
+    return { launched: false, tracked: false };
+  }
+
   const direct = await spawnInstaller({
     command: filePath,
-    args: [],
+    args: options.args,
     cwd: path.dirname(filePath),
     failureMessage: "Failed to execute game installer directly",
     onExit: options.onExit,
@@ -300,7 +387,7 @@ const executeLinuxInstaller = async (
 
   const wine = await spawnInstaller({
     command: "wine",
-    args: [filePath],
+    args: [filePath, ...options.args],
     cwd: path.dirname(filePath),
     env: options.winePrefixPath
       ? { ...process.env, WINEPREFIX: options.winePrefixPath }
@@ -346,6 +433,8 @@ const updateInstallerState = async (
     | "installerRunning"
     | "installerStartedAt"
     | "installerPath"
+    | "installerProfile"
+    | "installationPath"
   >
 ) => {
   const download = await downloadsSublevel.get(gameKey);
@@ -392,6 +481,40 @@ const handleInstallerExit = async (
     objectId
   ).searchAndBindInstalledExecutable(installerStartedAt, winePrefixPath);
 
+  if (
+    executableFound &&
+    download.installerProfile === "fitgirl-inno" &&
+    download.folderName &&
+    download.installationPath
+  ) {
+    const downloadRoot = path.resolve(download.downloadPath);
+    const sourcePath = path.resolve(downloadRoot, download.folderName);
+    const installationPath = path.resolve(download.installationPath);
+    const relativeSourcePath = path.relative(downloadRoot, sourcePath);
+    const sourceIsInsideDownloadRoot =
+      relativeSourcePath.length > 0 &&
+      !relativeSourcePath.startsWith(`..${path.sep}`) &&
+      relativeSourcePath !== ".." &&
+      !path.isAbsolute(relativeSourcePath);
+
+    if (
+      sourceIsInsideDownloadRoot &&
+      sourcePath.toLowerCase() !== installationPath.toLowerCase()
+    ) {
+      try {
+        await fs.promises.rm(sourcePath, { recursive: true, force: true });
+        logger.info(
+          `[GameInstaller] Removed FitGirl source folder ${sourcePath}`
+        );
+      } catch (error) {
+        logger.error(
+          `[GameInstaller] Failed to remove FitGirl source folder ${sourcePath}`,
+          error
+        );
+      }
+    }
+  }
+
   const exitedQuickly =
     Date.now() - installerStartedAt < QUICK_INSTALLER_EXIT_MS;
 
@@ -437,7 +560,9 @@ const openGameInstaller = async (
     objectId
   );
 
-  const gamePath = download ? await getDownloadFolderPath(download) : null;
+  if (!download) return false;
+
+  const gamePath = await getDownloadFolderPath(download);
 
   if (!gamePath || !fs.existsSync(gamePath)) {
     return true;
@@ -465,6 +590,19 @@ const openGameInstaller = async (
     return true;
   }
 
+  if (!game) {
+    releaseRunningInstaller(gameKey, installerStartedAt);
+    return false;
+  }
+
+  const installerProfile = await resolveGameInstallerProfile(download);
+  const installationPath = getGameInstallationPath(download, game);
+  const installerArguments = installerProfile.buildArguments(installationPath);
+
+  logger.info(
+    `[GameInstaller] Using ${installerProfile.id} profile for ${objectId}`
+  );
+
   let installerFinished = false;
   let trackingTimeout: NodeJS.Timeout | null = null;
   let markLaunchRecorded = () => {};
@@ -484,6 +622,10 @@ const openGameInstaller = async (
   };
 
   const launchResult = await executeGameInstaller(installerPath, {
+    args: installerArguments,
+    forceElevation: installerProfile.requiresElevation,
+    installationPath,
+    replaceInstallerTempFiles: installerProfile.replaceInstallerTempFiles,
     gameId: objectId,
     winePrefixPath,
     protonPath: game?.protonPath,
@@ -496,6 +638,13 @@ const openGameInstaller = async (
           winePrefixPath,
           exitCode
         )
+      ),
+    onProgress: (progress) =>
+      WindowManager.sendToAppWindows(
+        "on-game-installation-progress",
+        shop,
+        objectId,
+        progress
       ),
     onCancel: () =>
       afterLaunchRecorded(() =>
@@ -546,6 +695,8 @@ const openGameInstaller = async (
         installerRunning: tracked && !installerFinished,
         installerStartedAt,
         installerPath,
+        installerProfile: installerProfile.id,
+        installationPath,
       });
     }
   } finally {

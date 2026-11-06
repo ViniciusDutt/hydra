@@ -1428,6 +1428,19 @@ contextBridge.exposeInMainWorld("electron", {
     return () =>
       ipcRenderer.removeListener("on-game-installer-closed", listener);
   },
+  onGameInstallationProgress: (
+    cb: (shop: GameShop, objectId: string, progress: number) => void
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      shop: GameShop,
+      objectId: string,
+      progress: number
+    ) => cb(shop, objectId, progress);
+    ipcRenderer.on("on-game-installation-progress", listener);
+    return () =>
+      ipcRenderer.removeListener("on-game-installation-progress", listener);
+  },
   onExtractionComplete: (cb: (shop: GameShop, objectId: string) => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,

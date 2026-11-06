@@ -1691,6 +1691,8 @@ function DownloadGameOptions({
       automaticallyExtract: automaticExtractionEnabled,
       automaticallyDeleteArchiveFiles: deleteArchiveFilesAfterExtraction,
       fileSize: option.fileSize,
+      downloadSourceName: option.downloadSourceName,
+      repackTitle: option.title,
     } as const;
 
     setIsSubmitting(true);

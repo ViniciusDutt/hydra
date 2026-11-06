@@ -223,7 +223,8 @@ export function Hero({
       return {
         label: t("installing", { ns: "downloads" }),
         icon: <HourglassIcon size={24} />,
-        disabled: true,
+        onClick: onInstall,
+        disabled: false,
       };
     }
 
