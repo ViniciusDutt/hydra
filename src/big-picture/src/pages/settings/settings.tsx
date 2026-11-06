@@ -22,6 +22,8 @@ import { BigPictureSettingsSection } from "./big-picture";
 import { CompatibilitySettingsSection } from "./compatibility";
 import { ContentSettingsSection } from "./content";
 import { DownloadsSettingsSection } from "./downloads";
+import { NetworkSettingsSection } from "./network";
+import { useTranslation } from "react-i18next";
 import { EmulationSettingsSection } from "./emulation";
 import {
   isRetroArchEmulationDeepLink,
@@ -53,6 +55,7 @@ import "./page.scss";
 const ALL_SETTINGS_TABS = [
   { id: "general", label: "General" },
   { id: "downloads", label: "Downloads" },
+  { id: "network", label: "Network" },
   { id: "notifications", label: "Notifications" },
   { id: "content", label: "Content" },
   { id: "screenshots", label: "Screenshots" },
@@ -106,6 +109,7 @@ const SETTINGS_TAB_CONTENT: Record<
 > = {
   general: GeneralSettingsSection,
   downloads: DownloadsSettingsSection,
+  network: NetworkSettingsSection,
   notifications: NotificationsSettingsSection,
   content: ContentSettingsSection,
   screenshots: ScreenshotsSettingsSection,
@@ -167,6 +171,7 @@ function SettingsTabPanel({
 }
 
 export default function Settings() {
+  const { i18n } = useTranslation();
   const { userDetails } = useUserDetails();
   const { search } = useLocation();
   const [selectedTab, setSelectedTab] = useState<SettingsTabId>(
@@ -282,15 +287,20 @@ export default function Settings() {
     return visibleTabs.map(
       (tab): TabsItem<SettingsTabId> => ({
         value: tab.id,
-        label: tab.label,
+        label:
+          tab.id === "network" && i18n.language.startsWith("pt")
+            ? "Internet"
+            : tab.label,
       })
     );
-  }, [visibleTabs]);
+  }, [visibleTabs, i18n.language]);
 
   const initialFocusTarget = useMemo<FocusOverrideTarget | null>(() => {
     const platform = globalThis.window.electron.platform;
 
     switch (selectedTab) {
+      case "network":
+        return { type: "item", itemId: "network-refresh" };
       case "general":
         return {
           type: "item",

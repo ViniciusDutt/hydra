@@ -1501,6 +1501,9 @@ contextBridge.exposeInMainWorld("electron", {
   checkFolderWritePermission: (path: string) =>
     ipcRenderer.invoke("checkFolderWritePermission", path),
   getNetworkInterfaces: () => ipcRenderer.invoke("getNetworkInterfaces"),
+  getNetworkStatus: () => ipcRenderer.invoke("getNetworkStatus"),
+  connectWifi: (ssid: string, password: string) =>
+    ipcRenderer.invoke("connectWifi", ssid, password),
 
   /* Cloud save */
   uploadSaveGame: (

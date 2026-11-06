@@ -1127,6 +1127,8 @@ declare global {
     getDiskFreeSpace: (path: string) => Promise<DiskUsage | null>;
     checkFolderWritePermission: (path: string) => Promise<boolean>;
     getNetworkInterfaces: () => Promise<NetworkInterface[]>;
+    getNetworkStatus: () => Promise<import("@types").NetworkStatus>;
+    connectWifi: (ssid: string, password: string) => Promise<void>;
 
     /* Cloud save */
     uploadSaveGame: (

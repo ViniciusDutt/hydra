@@ -20,6 +20,7 @@ import type { RecompilationSummary } from "./recompilation.types";
 
 export type FriendRequestAction = "ACCEPTED" | "REFUSED" | "CANCEL";
 export * from "./download-contract";
+export * from "./network.types";
 
 export type HydraCloudFeature =
   | "achievements"

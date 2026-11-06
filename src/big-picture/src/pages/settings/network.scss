@@ -1,0 +1,54 @@
+.network-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing-unit) * 8);
+  width: 100%;
+
+  &__active {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--spacing-unit) * 3);
+
+    h3 {
+      margin: 0;
+      color: var(--text);
+      font-size: 22px;
+      font-weight: 600;
+    }
+  }
+
+  &__ethernet {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--spacing-unit) * 3);
+    min-height: 66px;
+    padding: calc(var(--spacing-unit) * 4);
+    box-sizing: border-box;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    font-size: 22px;
+  }
+
+  &__connected {
+    color: #67c53b;
+    flex-shrink: 0;
+  }
+
+  &__globe {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  &__content,
+  &__connection {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--spacing-unit) * 3);
+    align-items: stretch;
+  }
+
+  &__connection {
+    margin-top: calc(var(--spacing-unit) * 3);
+  }
+}
