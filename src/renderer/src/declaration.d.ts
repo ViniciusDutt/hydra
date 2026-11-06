@@ -1,5 +1,9 @@
 import type { AuthPage, Downloader } from "@shared";
 import type {
+  LocalScreenshot,
+  LocalScreenshotDraft,
+  LocalScreenshotUploadOptions,
+  ScreenshotUploadProgress,
   SystemPowerAction,
   AppUpdaterEvent,
   GameShop,
@@ -7,6 +11,7 @@ import type {
   DownloadProgress,
   SeedingStatus,
   UserPreferences,
+  ScreenshotInputStatus,
   StartGameDownloadPayload,
   RealDebridUser,
   PremiumizeUser,
@@ -18,6 +23,7 @@ import type {
   UserDetails,
   FriendRequestSync,
   FriendPresenceSync,
+  Notification,
   NotificationSync,
   UserFriend,
   GameArtifact,
@@ -54,6 +60,13 @@ import type {
   EmulationBackupProgress,
   EmulatorBinary,
   EmulatorInstallProgress,
+  RecompilationActionResult,
+  RecompilationInstallProgress,
+  RecompilationPrepareProgress,
+  RecompilationInstallState,
+  RecompilationRef,
+  RecompilationRomSource,
+  RecompilationRomState,
   EmulatorInstallResult,
   ResolvedInstallOption,
   DetectedRom,
@@ -124,6 +137,7 @@ import type {
   EpicStartAuthResult,
   EpicGameInstallOptions,
   StartEpicGameDownloadPayload,
+  StartEpicGameUpdatePayload,
   EpicManagedOperationResult,
   EpicCloudSaveState,
   EpicCloudSaveSettings,
@@ -145,6 +159,13 @@ declare global {
     const content: React.FunctionComponent<React.SVGAttributes<SVGElement>>;
     export default content;
   }
+
+  type MainWindowToast = {
+    title: string;
+    message?: string;
+    type: "success" | "error" | "warning";
+    duration?: number;
+  };
 
   type FileExplorerEntry = {
     name: string;
@@ -357,6 +378,7 @@ declare global {
     ) => Promise<ShopDetailsWithAssets | null>;
     getRandomGame: () => Promise<Steam250Game>;
     getGameStats: (objectId: string, shop: GameShop) => Promise<GameStats>;
+    getCatalogueNames: (list: "developers" | "publishers") => Promise<string[]>;
     getGameAssets: (
       objectId: string,
       shop: GameShop,
@@ -395,6 +417,7 @@ declare global {
       executablePath: string
     ) => Promise<boolean>;
     installGameOnSteam: (steamAppId: string) => Promise<void>;
+    uninstallGameOnSteam: (steamAppId: string) => Promise<void>;
     isMangohudAvailable: () => Promise<boolean>;
     isWinetricksAvailable: () => Promise<boolean>;
     addGameToLibrary: (
@@ -532,10 +555,12 @@ declare global {
     refreshLibraryAssets: () => Promise<void>;
     getRemoteLibrarySyncState: () => Promise<boolean>;
     openGameInstaller: (shop: GameShop, objectId: string) => Promise<boolean>;
-    getGameInstallerActionType: (
+    hasGameInstaller: (shop: GameShop, objectId: string) => Promise<boolean>;
+    hasDownloadFolder: (shop: GameShop, objectId: string) => Promise<boolean>;
+    getExecutablePickerPath: (
       shop: GameShop,
       objectId: string
-    ) => Promise<"install" | "open-folder">;
+    ) => Promise<string | null>;
     openGameInstallerPath: (shop: GameShop, objectId: string) => Promise<void>;
     openGameWinetricks: (shop: GameShop, objectId: string) => Promise<boolean>;
     openGameExecutablePath: (shop: GameShop, objectId: string) => Promise<void>;
@@ -568,7 +593,12 @@ declare global {
         selectedDiscPath?: string | null;
         dontAskDiscSelection?: boolean;
         platform?: string | null;
-        addDisc?: { path: string; label: string; fileName: string };
+        addDisc?: {
+          path: string;
+          label: string;
+          fileName: string;
+          isExecutable?: boolean;
+        };
         removeDiscPath?: string;
       }
     ) => Promise<LibraryGame>;
@@ -576,19 +606,40 @@ declare global {
     closeGame: (shop: GameShop, objectId: string) => Promise<boolean>;
     removeGameFromLibrary: (shop: GameShop, objectId: string) => Promise<void>;
     removeGame: (shop: GameShop, objectId: string) => Promise<void>;
-    deleteGameFolder: (shop: GameShop, objectId: string) => Promise<unknown>;
+    deleteGameFolder: (
+      shop: GameShop,
+      objectId: string,
+      options?: { deleteSourceArchive?: boolean; keepEpicUpdateFiles?: boolean }
+    ) => Promise<unknown>;
+    hasSourceArchive: (shop: GameShop, objectId: string) => Promise<boolean>;
+    recheckInstalledExecutable: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<boolean>;
     getGameByObjectId: (
       shop: GameShop,
       objectId: string
     ) => Promise<LibraryGame | null>;
+    getGameReviewPlaytime: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<number>;
     getGamesRunning: () => Promise<
-      Pick<GameRunning, "id" | "sessionDurationInMillis">[]
+      Pick<
+        GameRunning,
+        "id" | "sessionDurationInMillis" | "recompilationSlug"
+      >[]
     >;
     onGamesRunning: (
       cb: (
-        gamesRunning: Pick<GameRunning, "id" | "sessionDurationInMillis">[]
+        gamesRunning: Pick<
+          GameRunning,
+          "id" | "sessionDurationInMillis" | "recompilationSlug"
+        >[]
       ) => void
     ) => () => Electron.IpcRenderer;
+    onGameSessionSynced: (cb: () => void) => () => Electron.IpcRenderer;
+    onGamePlaytimeSynced: (cb: () => void) => () => Electron.IpcRenderer;
     onLibraryBatchComplete: (cb: () => void) => () => Electron.IpcRenderer;
     onRemoteLibrarySyncStateChange: (
       cb: (syncing: boolean) => void
@@ -676,7 +727,10 @@ declare global {
     ) => Promise<import("@types").Rpcs3DiscIdentityStatus>;
     setRpcs3ConfigRoot: (root: string) => Promise<EmulatorConfig>;
     detectEmulators: () => Promise<EmulatorConfigMap>;
-    detectEmulator: (system: EmulatorSystem) => Promise<EmulatorConfig>;
+    detectEmulator: (
+      system: EmulatorSystem,
+      options?: { includeDriveRoots?: boolean }
+    ) => Promise<EmulatorConfig>;
     previewEmulatorExecutable: (
       system: EmulatorSystem,
       executablePath?: string | null
@@ -719,7 +773,7 @@ declare global {
     ) => Promise<EmulatorConfig>;
     checkPs3Firmware: (
       executablePath: string | null
-    ) => Promise<{ installed: boolean }>;
+    ) => Promise<{ installed: boolean; path: string | null }>;
     checkEmulatorBios: (
       system: EmulatorSystem,
       executablePath: string | null,
@@ -735,9 +789,46 @@ declare global {
     onEmulatorInstallProgress: (
       cb: (payload: EmulatorInstallProgress) => void
     ) => () => void;
+    getRecompilationInstallState: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationInstallState | null>;
+    installRecompilation: (
+      ref: RecompilationRef,
+      parentDirectory?: string
+    ) => Promise<RecompilationActionResult>;
+    uninstallRecompilation: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationActionResult>;
+    openRecompilationFolder: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationActionResult>;
+    playRecompilation: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationActionResult>;
+    closeRecompilation: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationActionResult>;
+    getRecompilationRomState: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationRomState | null>;
+    setRecompilationRom: (
+      ref: RecompilationRef,
+      choice: { source: RecompilationRomSource; path?: string }
+    ) => Promise<RecompilationActionResult>;
+    onRecompilationInstallProgress: (
+      cb: (payload: RecompilationInstallProgress) => void
+    ) => () => void;
+    prepareRecompilation: (
+      ref: RecompilationRef
+    ) => Promise<RecompilationActionResult>;
+    onRecompilationPrepareProgress: (
+      cb: (payload: RecompilationPrepareProgress) => void
+    ) => () => void;
     /* RetroArch */
     getRetroArchConfig: () => Promise<RetroArchConfig>;
-    detectRetroArch: () => Promise<RetroArchConfig>;
+    detectRetroArch: (options?: {
+      includeDriveRoots?: boolean;
+    }) => Promise<RetroArchConfig>;
     previewRetroArchExecutable: (
       executablePath?: string | null
     ) => Promise<RetroArchExecutablePreview | null>;
@@ -816,7 +907,9 @@ declare global {
       scanSubfolders: boolean
     ) => Promise<{ fileCount: number }>;
     checkRetroArchExecutable: () => Promise<{ exists: boolean }>;
-    removeRetroArch: () => Promise<RetroArchConfig>;
+    removeRetroArch: (options?: {
+      removeGames?: boolean;
+    }) => Promise<RetroArchConfig>;
     addRetroArchRomFolder: (
       folderPath: string,
       scanSubfolders: boolean
@@ -845,7 +938,10 @@ declare global {
       gamesYmlPath: string | null;
       gamesYmlEntries: { titleId: string; path: string }[];
     }>;
-    removeEmulator: (system: EmulatorSystem) => Promise<EmulatorConfig>;
+    removeEmulator: (
+      system: EmulatorSystem,
+      options?: { removeGames?: boolean }
+    ) => Promise<EmulatorConfig>;
     checkEmulatorExecutable: (
       system: EmulatorSystem
     ) => Promise<{ exists: boolean }>;
@@ -940,6 +1036,10 @@ declare global {
     onUserPreferencesUpdated: (
       cb: (preferences: UserPreferences | null) => void
     ) => () => Electron.IpcRenderer;
+    getScreenshotInputStatus: () => Promise<ScreenshotInputStatus>;
+    onScreenshotInputStatusChange: (
+      cb: (status: ScreenshotInputStatus) => void
+    ) => () => Electron.IpcRenderer;
     autoLaunch: (autoLaunchProps: {
       enabled: boolean;
       minimized: boolean;
@@ -977,6 +1077,9 @@ declare global {
         iconUrl: string | null;
       }[]
     >;
+    onGameInstallerClosed: (
+      cb: (shop: GameShop, objectId: string, executableFound: boolean) => void
+    ) => () => Electron.IpcRenderer;
     onExtractionComplete: (
       cb: (shop: GameShop, objectId: string) => void
     ) => () => Electron.IpcRenderer;
@@ -1076,6 +1179,7 @@ declare global {
     /* Clipboard */
     clipboard: {
       writeText: (text: string) => Promise<void>;
+      writeImage: (ownerId: string, screenshotId: string) => Promise<boolean>;
     };
 
     /* Misc */
@@ -1088,6 +1192,44 @@ declare global {
     ping: () => string;
     getDefaultDownloadsPath: () => Promise<string>;
     getScreenshotsPath: () => Promise<string>;
+    getScreenshotsFolderPath: () => Promise<string>;
+    getLocalScreenshots: () => Promise<LocalScreenshot[]>;
+    getLocalScreenshotsForGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<LocalScreenshot[]>;
+    deleteLocalScreenshotsForGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<number>;
+    countLocalScreenshotFilesForGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<number>;
+    getPublishedScreenshotIdsForGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<string[]>;
+    forgetPublishedScreenshots: (screenshotIds: string[]) => Promise<number>;
+    uploadLocalScreenshot: (
+      clientId: string,
+      options: LocalScreenshotUploadOptions
+    ) => Promise<LocalScreenshot | null>;
+    updateLocalScreenshotDraft: (
+      clientId: string,
+      draft: LocalScreenshotDraft
+    ) => Promise<LocalScreenshot | null>;
+    deleteLocalScreenshot: (clientId: string) => Promise<void>;
+    openScreenshotsFolder: () => Promise<void>;
+    onLocalScreenshotsChange: (
+      cb: (screenshots: LocalScreenshot[]) => void
+    ) => () => Electron.IpcRenderer;
+    onLocalScreenshotsMissing: (
+      cb: (count: number) => void
+    ) => () => Electron.IpcRenderer;
+    onScreenshotUploadProgress: (
+      cb: (progress: ScreenshotUploadProgress) => void
+    ) => () => Electron.IpcRenderer;
     getAchievementSouvenirSyncStatus: () => Promise<AchievementSouvenirSyncStatus>;
     getAchievementSouvenirSyncDetails: () => Promise<AchievementSouvenirSyncDetails>;
     retryAchievementSouvenirSync: () => Promise<AchievementSouvenirSyncRetryResult>;
@@ -1111,6 +1253,7 @@ declare global {
     listDrives: () => Promise<string[]>;
     showItemInFolder: (path: string) => Promise<void>;
     getImageDataUrl: (imageUrl: string) => Promise<string | null>;
+    getFileIcon: (filePath: string) => Promise<string | null>;
     getProcessedImage: (
       imageUrl: string | null,
       options: { width: number; height: number; preserveAnimation?: boolean }
@@ -1123,8 +1266,17 @@ declare global {
           needsAuth?: boolean;
           needsSubscription?: boolean;
           ifModifiedSince?: Date;
+          timeout?: number;
         }
       ) => Promise<T>;
+      getResponse: <T = unknown>(
+        url: string,
+        options?: {
+          params?: unknown;
+          needsAuth?: boolean;
+          acceptedStatuses?: number[];
+        }
+      ) => Promise<{ status: number; data: T }>;
       post: <T = unknown>(
         url: string,
         options?: {
@@ -1201,6 +1353,7 @@ declare global {
     deleteTempFile: (filePath: string) => Promise<void>;
     platform: NodeJS.Platform;
     isWayland: boolean;
+    hasNativeWindowDecorations: boolean;
 
     /* Auto update */
     onAutoUpdaterEvent: (
@@ -1249,6 +1402,10 @@ declare global {
     minimizeRetroAchievementsConnectionWindow: () => Promise<void>;
     closeRetroAchievementsConnectionWindow: () => Promise<void>;
     completeRetroAchievementsConnectionWindow: () => Promise<void>;
+    linkRetroAchievementsEmulatorAccount: (
+      username: string,
+      password: string
+    ) => Promise<boolean>;
     onRetroAchievementsConnected: (
       cb: () => void
     ) => () => Electron.IpcRenderer;
@@ -1268,8 +1425,12 @@ declare global {
       requestId?: string
     ) => Promise<EpicGameInstallOptions>;
     cancelEpicGameInstallOptions?: (requestId: string) => Promise<void>;
+    invalidateEpicGameInstallOptions?: (epicObjectId: string) => Promise<void>;
     startEpicGameDownload: (
       payload: StartEpicGameDownloadPayload
+    ) => Promise<EpicManagedOperationResult>;
+    startEpicGameUpdate?: (
+      payload: StartEpicGameUpdatePayload
     ) => Promise<EpicManagedOperationResult>;
     getEpicCloudSaveState: (
       epicObjectId: string
@@ -1336,6 +1497,9 @@ declare global {
     ) => () => Electron.IpcRenderer;
     onSyncNotificationCount: (
       cb: (notification: NotificationSync) => void
+    ) => () => Electron.IpcRenderer;
+    onLeaderboardNotification: (
+      cb: (notification: Notification) => void
     ) => () => Electron.IpcRenderer;
     onCloudGiftResolved: (
       cb: (giftId: string) => void
@@ -1436,18 +1600,24 @@ declare global {
     getFriendsSnapshot: () => Promise<FriendsSnapshot | null>;
     openFriendProfileInMainWindow: (userId: string) => Promise<void>;
     openAddFriendModalInMainWindow: () => Promise<void>;
+    showToastInMainWindow: (toast: MainWindowToast) => Promise<boolean>;
+    onShowToast: (
+      cb: (toast: MainWindowToast) => void
+    ) => () => Electron.IpcRenderer;
 
     /* Chat Window */
     openChatWindow: (friend: UserFriend) => Promise<void>;
     minimizeChatWindow: () => Promise<void>;
     closeChatWindow: () => Promise<void>;
     openGameInMainWindow: (gamePath: string) => Promise<void>;
+    openChatNotificationSettings: () => Promise<void>;
     consumePendingChatFriends: () => Promise<PendingChatFriend[]>;
     onChatFriendsPending: (cb: () => void) => () => Electron.IpcRenderer;
     setChatWindowState: (state: ChatWindowState) => Promise<void>;
     getChatUnreadState: () => Promise<ChatUnreadState>;
     /** Resolves to false when the read could not be saved. */
     markChatRead: (friendId: string, seq: number) => Promise<boolean>;
+    refreshOfficialChat: () => Promise<void>;
     onChatMessage: (
       cb: (sync: ChatMessageSync) => void
     ) => () => Electron.IpcRenderer;
