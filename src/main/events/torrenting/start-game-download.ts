@@ -34,6 +34,8 @@ const startGameDownload = async (
     fileSize,
     fileIndices,
     selectedFilesSize,
+    downloadSourceName,
+    repackTitle,
   } = payload;
 
   const parsedFileSize = parseBytes(fileSize ?? null);
@@ -69,6 +71,8 @@ const startGameDownload = async (
       selectedFilesSize,
       fileSize: selectedFilesSize ?? parsedFileSize,
       customTrackers: globalTrackers,
+      downloadSourceName,
+      repackTitle,
     };
     const prepareRealDebridInBackground =
       DownloadOrchestrator.preparesRealDebridInBackground(download);

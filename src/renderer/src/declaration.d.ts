@@ -1080,6 +1080,9 @@ declare global {
     onGameInstallerClosed: (
       cb: (shop: GameShop, objectId: string, executableFound: boolean) => void
     ) => () => Electron.IpcRenderer;
+    onGameInstallationProgress: (
+      cb: (shop: GameShop, objectId: string, progress: number) => void
+    ) => () => Electron.IpcRenderer;
     onExtractionComplete: (
       cb: (shop: GameShop, objectId: string) => void
     ) => () => Electron.IpcRenderer;

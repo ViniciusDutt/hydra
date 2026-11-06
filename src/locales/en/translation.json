@@ -1200,7 +1200,14 @@
     "installed_game_not_found_title": "Couldn't find the installed game",
     "installed_game_not_found_description": "Select the game's executable to finish setting it up.",
     "installer_launch_failed": "Couldn't start the installer",
-    "installing": "Installing…"
+    "installing": "Installing…",
+    "silent_install_title": "Installing {{title}}",
+    "silent_install_description": "{{profile}} automatic installation",
+    "silent_install_running": "Installing… {{progress}}%",
+    "silent_install_starting": "Installation in progress…",
+    "silent_install_performance_warning": "Installation can use a lot of CPU and memory. The computer may become slow or temporarily unresponsive.",
+    "silent_install_background": "Continue in background",
+    "installer_profile_automatic": "Hydra"
   },
   "settings": {
     "rpcs3_config_title": "RPCS3 configuration folder",

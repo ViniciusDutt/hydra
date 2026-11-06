@@ -124,6 +124,8 @@ export default function GameDetails() {
               fileSize: repack.fileSize,
               fileIndices,
               selectedFilesSize,
+              downloadSourceName: repack.downloadSourceName,
+              repackTitle: repack.title,
             };
 
             const response = addToQueueOnly

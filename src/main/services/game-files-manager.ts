@@ -704,13 +704,39 @@ export class GameFilesManager {
     if (await this.searchAndBindExecutable()) return true;
 
     try {
-      const download = await downloadsSublevel.get(this.gameKey);
-      if (!download) return false;
+      const [download, game] = await Promise.all([
+        downloadsSublevel.get(this.gameKey),
+        gamesSublevel.get(this.gameKey),
+      ]);
+      if (!download || !game) return false;
 
-      const executables = GameExecutables.getExecutablesForGame(this.objectId);
+      const catalogueExecutables =
+        GameExecutables.getExecutablesForGame(this.objectId) ?? [];
+      const titleExecutable = `${game.title.trim()}.exe`;
+      const executables = catalogueExecutables.some(
+        (executable) =>
+          executable.exe.toLowerCase() === titleExecutable.toLowerCase()
+      )
+        ? catalogueExecutables
+        : [
+            ...catalogueExecutables,
+            { exe: titleExecutable, name: titleExecutable },
+          ];
 
-      if (!executables || executables.length === 0) {
-        return false;
+      if (
+        download.installationPath &&
+        fs.existsSync(download.installationPath)
+      ) {
+        const installedExecutable = await findGameExecutableInFolder(
+          download.installationPath,
+          executables,
+          "installation",
+          INSTALLED_EXECUTABLE_MAX_DEPTH
+        );
+
+        if (installedExecutable) {
+          return await this.bindExecutable(installedExecutable);
+        }
       }
 
       const changedFolders = await listFoldersChangedSince(

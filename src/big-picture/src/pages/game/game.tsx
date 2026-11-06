@@ -48,6 +48,7 @@ import {
   DiscSelectionModal,
   DownloadGameModal,
   ExecutablePickerModal,
+  GameInstallationModal,
   type ExecutablePickerTarget,
 } from "../../components/modals";
 import {
@@ -1077,11 +1078,41 @@ export default function Game() {
   }, []);
 
   const installStep = useFinishedDownloadStep(downloadGame);
+  const [isInstallationModalOpen, setIsInstallationModalOpen] = useState(false);
+  const [installationProgress, setInstallationProgress] = useState(0);
+  const installationStartedRef = useRef(false);
   const [executablePickerTarget, setExecutablePickerTarget] =
     useState<ExecutablePickerTarget | null>(null);
 
+  useEffect(() => {
+    if (downloadGame?.download?.installerRunning) {
+      installationStartedRef.current = true;
+      return;
+    }
+
+    if (installationStartedRef.current) {
+      installationStartedRef.current = false;
+      setIsInstallationModalOpen(false);
+    }
+  }, [downloadGame?.download?.installerRunning]);
+
+  useEffect(() => {
+    return globalThis.window.electron.onGameInstallationProgress(
+      (shop, objectId, progress) => {
+        if (shop === downloadGame?.shop && objectId === downloadGame.objectId) {
+          setInstallationProgress(progress);
+        }
+      }
+    );
+  }, [downloadGame?.objectId, downloadGame?.shop]);
+
   const handleInstall = useCallback(async () => {
     if (!downloadGame) return;
+
+    setInstallationProgress(0);
+    setIsInstallationModalOpen(true);
+
+    if (downloadGame.download?.installerRunning) return;
 
     const opened = await globalThis.window.electron.openGameInstaller(
       downloadGame.shop,
@@ -1089,6 +1120,7 @@ export default function Game() {
     );
 
     if (!opened) {
+      setIsInstallationModalOpen(false);
       showErrorToast(t("installer_launch_failed", { ns: "downloads" }));
     }
 
@@ -2269,6 +2301,13 @@ export default function Game() {
           target={executablePickerTarget}
           onClose={handleCloseExecutablePicker}
           onSaved={handleExecutableSaved}
+        />
+
+        <GameInstallationModal
+          visible={isInstallationModalOpen}
+          game={downloadGame ?? null}
+          progress={installationProgress}
+          onBackground={() => setIsInstallationModalOpen(false)}
         />
 
         {game?.shop === "launchbox" ? (

@@ -147,7 +147,11 @@ export interface Download {
   installerRunning?: boolean;
   installerStartedAt?: number;
   installerPath?: string;
+  installerProfile?: string;
+  installationPath?: string;
   hasInstaller?: boolean;
+  downloadSourceName?: string;
+  repackTitle?: string;
   sourceArchiveName?: string;
   // Archives Hydra started extracting in place, kept until the whole download
   // is extracted. Only these are resumed, since a progress file next to an

@@ -46,6 +46,14 @@ describe("getFinishedDownload", () => {
   it("returns a finished download", () => {
     assert.equal(getFinishedDownload(makeGame({}))?.folderName, "Game");
   });
+
+  it("accepts completed status when progress rounding lags", () => {
+    assert.equal(
+      getFinishedDownload(makeGame({ progress: 0.999, status: "complete" }))
+        ?.folderName,
+      "Game"
+    );
+  });
 });
 
 describe("getFinishedDownloadStep", () => {
